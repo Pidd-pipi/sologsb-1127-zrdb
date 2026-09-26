@@ -25,15 +25,19 @@ import FacilityIcon from '../components/common/FacilityIcon';
 import { useLocalDraft } from '../hooks/useLocalDraft';
 import { usePointStore } from '../stores/pointStore';
 import {
+  DEFAULT_REVIEW_CYCLE,
   DISTRICTS,
   FACILITY_TYPES,
   MAINTAIN_UNITS,
+  REVIEW_CYCLES,
   type AccessPoint,
   type FacilityType,
+  type ReviewCycle,
 } from '../types/point';
 import { OCCUPIED_LEVELS, type OccupiedLevel } from '../types/inspection';
 import { judgeInspection } from '../utils/routeCheck';
 import { todayStr } from '../utils/format';
+import { nextReviewDateOf } from '../utils/review';
 
 interface PointForm {
   code: string;
@@ -43,6 +47,7 @@ interface PointForm {
   location: string;
   builtYear: number;
   maintainUnit: string;
+  reviewCycle: ReviewCycle;
   lng: number;
   lat: number;
   withFirstInspection: boolean;
@@ -66,6 +71,7 @@ function defaultForm(): PointForm {
     location: '',
     builtYear: new Date().getFullYear() - 5,
     maintainUnit: MAINTAIN_UNITS[0],
+    reviewCycle: DEFAULT_REVIEW_CYCLE,
     lng: 116.4183,
     lat: 39.9142,
     withFirstInspection: true,
@@ -113,6 +119,10 @@ export default function PointNew() {
       location: draft.location,
       builtYear: draft.builtYear,
       maintainUnit: draft.maintainUnit,
+      reviewCycle: draft.reviewCycle,
+      nextReviewDate: draft.withFirstInspection
+        ? nextReviewDateOf(draft.inspectDate || todayStr(), draft.reviewCycle)
+        : '',
       createdAt: '',
       updatedAt: '',
     };
@@ -142,6 +152,8 @@ export default function PointNew() {
         location: draft.location.trim(),
         builtYear: draft.builtYear,
         maintainUnit: draft.maintainUnit,
+        reviewCycle: draft.reviewCycle,
+        nextReviewDate: '',
         lng: Number(draft.lng),
         lat: Number(draft.lat),
       });
@@ -267,6 +279,17 @@ export default function PointNew() {
                       value={draft.maintainUnit}
                       onChange={(v) => patch({ maintainUnit: v })}
                       options={MAINTAIN_UNITS.map((u) => ({ value: u, label: u }))}
+                    />
+                  </Form.Item>
+                </Col>
+                <Col span={12}>
+                  <Form.Item label="核验周期" required>
+                    <Select
+                      id="reviewCycle"
+                      data-testid="review-cycle"
+                      value={draft.reviewCycle}
+                      onChange={(v) => patch({ reviewCycle: v })}
+                      options={REVIEW_CYCLES.map((c) => ({ value: c, label: c }))}
                     />
                   </Form.Item>
                 </Col>
@@ -464,6 +487,12 @@ export default function PointNew() {
               </Typography.Text>
               <Typography.Text type="secondary" className="gb-muted" data-testid="coord-preview">
                 经度 {Number(draft.lng).toFixed(6)} / 纬度 {Number(draft.lat).toFixed(6)}
+              </Typography.Text>
+              <Typography.Text type="secondary" className="gb-muted" data-testid="review-preview">
+                核验周期 {draft.reviewCycle}
+                {draft.withFirstInspection
+                  ? ` · 下次核验 ${nextReviewDateOf(draft.inspectDate || todayStr(), draft.reviewCycle)}`
+                  : ' · 首次核验后计算下次核验日期'}
               </Typography.Text>
             </Space>
           </Card>

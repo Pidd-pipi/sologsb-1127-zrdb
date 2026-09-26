@@ -1,9 +1,9 @@
 import { Tag } from 'antd';
 
-export type BadgeKind = 'conclusion' | 'rectify' | 'route' | 'generic';
+export type BadgeKind = 'conclusion' | 'rectify' | 'route' | 'due' | 'generic';
 
 interface StatusBadgeProps {
-  /** 结论文本：合格 / 限期整改 / 不合格 / 待整改 / 已整改 / 复发 / 可通行 / 不可通行 */
+  /** 结论文本：合格 / 限期整改 / 不合格 / 待整改 / 已整改 / 复发 / 可通行 / 不可通行 / 已逾期 / 30天内到期 / 有效 */
   value: string;
   kind?: BadgeKind;
   /** 是否附带边框（默认无边框的浅色标签） */
@@ -20,6 +20,9 @@ const COLOR_MAP: Record<string, string> = {
   可通行: 'success',
   不可通行: 'error',
   未核验: 'default',
+  已逾期: 'error',
+  '30天内到期': 'warning',
+  有效: 'success',
 };
 
 export function badgeColor(value: string): string {

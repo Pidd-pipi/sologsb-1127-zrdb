@@ -30,6 +30,14 @@ export const MAINTAIN_UNITS = [
   '城管委设施科',
 ] as const;
 
+/** 核验周期 */
+export type ReviewCycle = '每月' | '每季度' | '每半年' | '每年';
+
+export const REVIEW_CYCLES: ReviewCycle[] = ['每月', '每季度', '每半年', '每年'];
+
+/** 登记时默认每年一验 */
+export const DEFAULT_REVIEW_CYCLE: ReviewCycle = '每年';
+
 /** 设施点位 */
 export interface AccessPoint {
   id: string;
@@ -45,6 +53,10 @@ export interface AccessPoint {
   /** 建成年代 */
   builtYear: number;
   maintainUnit: string;
+  /** 核验周期，默认每年 */
+  reviewCycle: ReviewCycle;
+  /** 下次核验日期 YYYY-MM-DD，由最近一次核验日 + 周期推算；未核验时为空 */
+  nextReviewDate: string;
   createdAt: string;
   updatedAt: string;
 }

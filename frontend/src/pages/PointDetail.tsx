@@ -27,9 +27,11 @@ import FacilityIcon from '../components/common/FacilityIcon';
 import EmptyState from '../components/common/EmptyState';
 import { usePointStore } from '../stores/pointStore';
 import { OCCUPIED_LEVELS, type Inspection, type OccupiedLevel } from '../types/inspection';
+import { REVIEW_CYCLES, type ReviewCycle } from '../types/point';
 import type { RectifyPlan } from '../types/rectify';
 import { judgeInspection } from '../utils/routeCheck';
 import { addDays, isOverdue, todayStr } from '../utils/format';
+import { DUE_STATUS_LABEL, nextReviewDateOf, reviewDueStatus } from '../utils/review';
 
 interface InlineInspection {
   date: string;
@@ -51,6 +53,7 @@ export default function PointDetail() {
   const loaded = usePointStore((s) => s.loaded);
   const addInspection = usePointStore((s) => s.addInspection);
   const addRectify = usePointStore((s) => s.addRectify);
+  const updatePoint = usePointStore((s) => s.updatePoint);
 
   const point = useMemo(() => points.find((p) => p.id === id), [points, id]);
   const history = useMemo(
@@ -130,12 +133,33 @@ export default function PointDetail() {
         conclusion: judgement.conclusion,
         problem: form.problem.trim(),
       });
-      message.success(`已新增核验记录（${judgement.conclusion}）`);
+      // 与 store 口径一致：按全部记录中的最新核验日推算
+      const latestDate = history.reduce<string>(
+        (acc, i) => (i.date > acc ? i.date : acc),
+        form.date || todayStr(),
+      );
+      const next = nextReviewDateOf(latestDate, point.reviewCycle ?? '每年');
+      message.success(`已新增核验记录（${judgement.conclusion}），下次核验日期更新为 ${next}`);
       setForm((cur) => ({ ...cur, problem: '', date: todayStr() }));
     } catch (e) {
       message.error(`核验记录保存失败：${e instanceof Error ? e.message : String(e)}`);
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handleCycleChange = async (cycle: ReviewCycle) => {
+    try {
+      await updatePoint(point.id, { reviewCycle: cycle });
+      const latest = history[0];
+      const next = latest ? nextReviewDateOf(latest.date, cycle) : '';
+      message.success(
+        next
+          ? `核验周期已调整为${cycle}，下次核验日期重算为 ${next}`
+          : `核验周期已调整为${cycle}，首次核验后计算下次日期`,
+      );
+    } catch (e) {
+      message.error(`周期调整失败：${e instanceof Error ? e.message : String(e)}`);
     }
   };
 
@@ -214,6 +238,8 @@ export default function PointDetail() {
   ];
 
   const latest = history[0];
+  const dueStatus = reviewDueStatus(point.nextReviewDate);
+  const expiredPass = dueStatus === 'overdue' && latest?.conclusion === '合格';
 
   return (
     <div>
@@ -225,10 +251,18 @@ export default function PointDetail() {
               {point.name}
             </h1>
             <StatusBadge value={latest?.conclusion ?? '未核验'} kind="conclusion" bordered />
+            <StatusBadge value={DUE_STATUS_LABEL[dueStatus]} kind="due" bordered />
           </Space>
           <Typography.Text type="secondary">
             {point.code} · {point.district} · {point.location || '未填写所在道路或建筑'}
           </Typography.Text>
+          {expiredPass ? (
+            <div>
+              <Typography.Text type="danger" className="gb-muted" data-testid="expired-pass-hint">
+                最近一次合格已越过复核期限，不再计入合格率统计，请尽快安排复核。
+              </Typography.Text>
+            </div>
+          ) : null}
         </div>
         <Space>
           <Link to="/map">
@@ -257,6 +291,22 @@ export default function PointDetail() {
               <Descriptions.Item label="所在道路或建筑">{point.location || '—'}</Descriptions.Item>
               <Descriptions.Item label="建成年代">{point.builtYear} 年</Descriptions.Item>
               <Descriptions.Item label="养护单位">{point.maintainUnit}</Descriptions.Item>
+              <Descriptions.Item label="核验周期">
+                <Select
+                  size="small"
+                  value={point.reviewCycle ?? '每年'}
+                  onChange={handleCycleChange}
+                  options={REVIEW_CYCLES.map((c) => ({ value: c, label: c }))}
+                  style={{ width: 120 }}
+                  data-testid="detail-review-cycle"
+                />
+              </Descriptions.Item>
+              <Descriptions.Item label="下次核验日期">
+                <Space size={8}>
+                  <span data-testid="next-review-date">{point.nextReviewDate || '未核验'}</span>
+                  <StatusBadge value={DUE_STATUS_LABEL[dueStatus]} kind="due" />
+                </Space>
+              </Descriptions.Item>
               <Descriptions.Item label="经纬度">
                 {point.lng.toFixed(6)}, {point.lat.toFixed(6)}
               </Descriptions.Item>

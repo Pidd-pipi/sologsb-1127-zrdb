@@ -20,16 +20,18 @@ export const EMPTY_FILTER: InspectionFilter = {
   toDate: '',
 };
 
+export type DrillKind = 'district' | 'facilityType' | 'pending' | 'overdue' | 'dueSoon' | 'valid' | '';
+
 interface UiState {
   filter: InspectionFilter;
   /** 总览页下钻：点击统计块后展示的清单维度 */
-  drill: { kind: 'district' | 'facilityType' | 'pending' | ''; value: string };
+  drill: { kind: DrillKind; value: string };
   rectifyStatus: RectifyStatus | '';
   selectedPointId: string;
   mapFacilityFilter: FacilityType | '';
   setFilter: (patch: Partial<InspectionFilter>) => void;
   resetFilter: () => void;
-  setDrill: (kind: 'district' | 'facilityType' | 'pending' | '', value: string) => void;
+  setDrill: (kind: DrillKind, value: string) => void;
   setRectifyStatus: (status: RectifyStatus | '') => void;
   setSelectedPointId: (id: string) => void;
   setMapFacilityFilter: (t: FacilityType | '') => void;

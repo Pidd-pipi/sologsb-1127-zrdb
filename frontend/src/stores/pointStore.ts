@@ -4,6 +4,7 @@ import type { AccessPoint, AccessPointDraft } from '../types/point';
 import type { Inspection, InspectionDraft } from '../types/inspection';
 import type { RectifyPlan, RectifyPlanDraft } from '../types/rectify';
 import { makeId, toPlain, todayStr } from '../utils/format';
+import { nextReviewDateOf } from '../utils/review';
 
 interface PointState {
   points: AccessPoint[];
@@ -14,6 +15,7 @@ interface PointState {
   error: string;
   load: () => Promise<void>;
   addPoint: (draft: AccessPointDraft) => Promise<AccessPoint>;
+  updatePoint: (id: string, patch: Partial<AccessPoint>) => Promise<void>;
   addInspection: (draft: InspectionDraft) => Promise<Inspection>;
   addRectify: (draft: RectifyPlanDraft) => Promise<RectifyPlan>;
   updateRectify: (id: string, patch: Partial<RectifyPlan>) => Promise<void>;
@@ -64,6 +66,21 @@ export const usePointStore = create<PointState>((set, get) => ({
     return point;
   },
 
+  updatePoint: async (id, patch) => {
+    const plain = toPlain({ ...patch, updatedAt: new Date().toISOString() });
+    // 调整核验周期时，按最新一次核验日同步重算下次核验日期
+    if (plain.reviewCycle) {
+      const latest = get()
+        .inspections.filter((i) => i.pointId === id)
+        .reduce<string>((acc, i) => (i.date > acc ? i.date : acc), '');
+      plain.nextReviewDate = latest ? nextReviewDateOf(latest, plain.reviewCycle) : '';
+    }
+    await db.points.update(id, plain);
+    set((s) => ({
+      points: s.points.map((p) => (p.id === id ? { ...p, ...plain } : p)),
+    }));
+  },
+
   addInspection: async (draft) => {
     const inspection: Inspection = toPlain({
       ...draft,
@@ -74,6 +91,21 @@ export const usePointStore = create<PointState>((set, get) => ({
     set((s) => ({
       inspections: [inspection, ...s.inspections].sort((a, b) => (a.date < b.date ? 1 : -1)),
     }));
+    // 从实际核验日按点位周期重新计算下次核验日期
+    const point = get().points.find((p) => p.id === inspection.pointId);
+    if (point) {
+      const latest = get()
+        .inspections.filter((i) => i.pointId === point.id)
+        .reduce<string>((acc, i) => (i.date > acc ? i.date : acc), '');
+      const nextReviewDate = nextReviewDateOf(latest, point.reviewCycle ?? '每年');
+      if (nextReviewDate && nextReviewDate !== point.nextReviewDate) {
+        const patch = { nextReviewDate, updatedAt: new Date().toISOString() };
+        await db.points.update(point.id, patch);
+        set((s) => ({
+          points: s.points.map((p) => (p.id === point.id ? { ...p, ...patch } : p)),
+        }));
+      }
+    }
     // 结论为不合格时自动生成整改条目，形成闭环
     if (inspection.conclusion === '不合格') {
       const exists = get().rectifies.some(
