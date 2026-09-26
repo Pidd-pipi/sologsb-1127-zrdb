@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react';
 import {
+  Alert,
   App,
   Button,
   Card,
@@ -18,7 +19,7 @@ import {
   Typography,
 } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
-import { PlusOutlined, SaveOutlined, ReloadOutlined } from '@ant-design/icons';
+import { PlusOutlined, SaveOutlined, ReloadOutlined, CalendarOutlined } from '@ant-design/icons';
 import { Link, useParams } from 'react-router-dom';
 import MapPanel from '../components/common/MapPanel';
 import MeasureInput from '../components/common/MeasureInput';
@@ -26,10 +27,17 @@ import StatusBadge from '../components/common/StatusBadge';
 import FacilityIcon from '../components/common/FacilityIcon';
 import EmptyState from '../components/common/EmptyState';
 import { usePointStore } from '../stores/pointStore';
+import { VERIFY_CYCLES, type VerifyCycle } from '../types/point';
 import { OCCUPIED_LEVELS, type Inspection, type OccupiedLevel } from '../types/inspection';
 import type { RectifyPlan } from '../types/rectify';
 import { judgeInspection } from '../utils/routeCheck';
-import { addDays, isOverdue, todayStr } from '../utils/format';
+import { addDays, daysUntil, isOverdue, todayStr } from '../utils/format';
+import {
+  nextVerifyDateFrom,
+  verifyStatusOf,
+  VERIFY_STATUS_LABEL,
+  type VerifyStatus,
+} from '../utils/verify';
 
 interface InlineInspection {
   date: string;
@@ -51,6 +59,7 @@ export default function PointDetail() {
   const loaded = usePointStore((s) => s.loaded);
   const addInspection = usePointStore((s) => s.addInspection);
   const addRectify = usePointStore((s) => s.addRectify);
+  const updateVerifyCycle = usePointStore((s) => s.updateVerifyCycle);
 
   const point = useMemo(() => points.find((p) => p.id === id), [points, id]);
   const history = useMemo(
@@ -77,6 +86,13 @@ export default function PointDetail() {
     problem: '',
   }));
   const [saving, setSaving] = useState(false);
+  /** 调整核验周期：选中值与点位当前值不一致时显示「保存周期」 */
+  const [cycleDraft, setCycleDraft] = useState<VerifyCycle | ''>('');
+  const [savingCycle, setSavingCycle] = useState(false);
+
+  const cycleValue: VerifyCycle = cycleDraft || point?.verifyCycle || '每年';
+  const verifyStatus: VerifyStatus = point ? verifyStatusOf(point.nextVerifyDate) : '未安排';
+  const daysLeft = point?.nextVerifyDate ? daysUntil(point.nextVerifyDate) : Infinity;
 
   const judgement = useMemo(
     () =>
@@ -136,6 +152,23 @@ export default function PointDetail() {
       message.error(`核验记录保存失败：${e instanceof Error ? e.message : String(e)}`);
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handleSaveCycle = async () => {
+    if (!point || !cycleDraft || cycleDraft === point.verifyCycle) {
+      setCycleDraft('');
+      return;
+    }
+    setSavingCycle(true);
+    try {
+      await updateVerifyCycle(point.id, cycleDraft);
+      message.success(`核验周期已调整为「${cycleDraft}」，下次核验日期已重算`);
+      setCycleDraft('');
+    } catch (e) {
+      message.error(`周期调整失败：${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setSavingCycle(false);
     }
   };
 
@@ -214,17 +247,30 @@ export default function PointDetail() {
   ];
 
   const latest = history[0];
+  const statusLabel =
+    verifyStatus === '即将到期'
+      ? VERIFY_STATUS_LABEL.即将到期
+      : VERIFY_STATUS_LABEL[verifyStatus];
+  const cyclePreviewBase = latest?.date || todayStr();
+  const cyclePreviewDate = nextVerifyDateFrom(cyclePreviewBase, cycleValue);
+  /** 最新结论为合格但已越过复核期限：不能再按合格计入统计 */
+  const expiredPass = verifyStatus === '已逾期' && latest?.conclusion === '合格';
 
   return (
     <div>
       <div className="gb-page-head">
         <div>
-          <Space size={10} align="center">
+          <Space size={10} align="center" wrap>
             <FacilityIcon type={point.facilityType} size={26} />
             <h1 className="gb-page-title" data-testid="point-name">
               {point.name}
             </h1>
             <StatusBadge value={latest?.conclusion ?? '未核验'} kind="conclusion" bordered />
+            <StatusBadge
+              value={statusLabel}
+              kind="generic"
+              bordered
+            />
           </Space>
           <Typography.Text type="secondary">
             {point.code} · {point.district} · {point.location || '未填写所在道路或建筑'}
@@ -262,6 +308,93 @@ export default function PointDetail() {
               </Descriptions.Item>
               <Descriptions.Item label="核验次数">{history.length} 次</Descriptions.Item>
             </Descriptions>
+          </Card>
+
+          <Card
+            size="small"
+            style={{ marginTop: 16 }}
+            title={
+              <Space size={6}>
+                <CalendarOutlined />
+                <span>核验周期与到期状态</span>
+              </Space>
+            }
+          >
+            <Descriptions column={1} size="small" bordered>
+              <Descriptions.Item label="核验周期">{point.verifyCycle}</Descriptions.Item>
+              <Descriptions.Item label="下次核验日期">
+                <Space size={6} wrap>
+                  {point.nextVerifyDate || (
+                    <Typography.Text type="secondary">未安排</Typography.Text>
+                  )}
+                  <StatusBadge value={statusLabel} kind="generic" />
+                  {Number.isFinite(daysLeft) ? (
+                    <Typography.Text
+                      type={daysLeft < 0 ? 'danger' : daysLeft <= 30 ? 'warning' : 'secondary'}
+                      className="gb-muted"
+                      data-testid="days-left"
+                    >
+                      {daysLeft < 0
+                        ? `已逾期 ${Math.abs(daysLeft)} 天`
+                        : daysLeft === 0
+                          ? '今天到期'
+                          : `剩余 ${daysLeft} 天`}
+                    </Typography.Text>
+                  ) : null}
+                </Space>
+              </Descriptions.Item>
+            </Descriptions>
+
+            {expiredPass ? (
+              <Alert
+                style={{ marginTop: 12 }}
+                type="error"
+                showIcon
+                data-testid="expired-pass-alert"
+                message="最近一次结论为「合格」，但已越过复核期限"
+                description="该点位不再按合格计入合格率，已进入待办清单，请尽快安排复核。"
+              />
+            ) : verifyStatus === '即将到期' ? (
+              <Alert
+                style={{ marginTop: 12 }}
+                type="warning"
+                showIcon
+                message={`将在 ${daysLeft} 天内到达核验期限`}
+                description="请提前安排复核，避免过期。"
+              />
+            ) : null}
+
+            <Divider style={{ margin: '12px 0' }} />
+            <Form layout="inline" style={{ rowGap: 8 }}>
+              <Form.Item label="调整周期" style={{ marginBottom: 0 }}>
+                <Select
+                  value={cycleValue}
+                  style={{ width: 120 }}
+                  onChange={(v) => setCycleDraft(v)}
+                  options={VERIFY_CYCLES.map((c) => ({ value: c, label: c }))}
+                  data-testid="cycle-select"
+                />
+              </Form.Item>
+              <Form.Item style={{ marginBottom: 0 }}>
+                <Space direction="vertical" size={0}>
+                  <Button
+                    type="primary"
+                    ghost
+                    loading={savingCycle}
+                    disabled={!cycleDraft || cycleDraft === point.verifyCycle}
+                    onClick={handleSaveCycle}
+                    data-testid="save-cycle"
+                  >
+                    保存周期
+                  </Button>
+                  <Typography.Text type="secondary" className="gb-muted">
+                    {cycleDraft && cycleDraft !== point.verifyCycle
+                      ? `保存后下次核验：${cyclePreviewDate}（按最近核验日 ${cyclePreviewBase} 起算）`
+                      : `当前下次核验：${point.nextVerifyDate || '未安排'}`}
+                  </Typography.Text>
+                </Space>
+              </Form.Item>
+            </Form>
           </Card>
         </Col>
       </Row>
@@ -400,6 +533,10 @@ export default function PointDetail() {
                   生成整改条目
                 </Button>
               </Space>
+              <Typography.Text type="secondary" className="gb-muted" style={{ marginTop: 8 }}>
+                保存后按本次实际核验日与「{point.verifyCycle}」周期重算下次核验日期：
+                {nextVerifyDateFrom(form.date || todayStr(), point.verifyCycle)}
+              </Typography.Text>
             </Form>
           </Card>
         </Col>

@@ -1,9 +1,10 @@
 import { create } from 'zustand';
 import { db, ensureSeed } from '../db';
-import type { AccessPoint, AccessPointDraft } from '../types/point';
+import type { AccessPoint, AccessPointDraft, VerifyCycle } from '../types/point';
 import type { Inspection, InspectionDraft } from '../types/inspection';
 import type { RectifyPlan, RectifyPlanDraft } from '../types/rectify';
 import { makeId, toPlain, todayStr } from '../utils/format';
+import { nextVerifyDateFrom } from '../utils/verify';
 
 interface PointState {
   points: AccessPoint[];
@@ -17,6 +18,8 @@ interface PointState {
   addInspection: (draft: InspectionDraft) => Promise<Inspection>;
   addRectify: (draft: RectifyPlanDraft) => Promise<RectifyPlan>;
   updateRectify: (id: string, patch: Partial<RectifyPlan>) => Promise<void>;
+  /** 调整点位核验周期，并以最近一次实际核验日（无则今天）重算下次核验日期 */
+  updateVerifyCycle: (pointId: string, cycle: VerifyCycle) => Promise<void>;
   getPoint: (id: string) => AccessPoint | undefined;
   inspectionsOf: (pointId: string) => Inspection[];
   rectifiesOf: (pointId: string) => RectifyPlan[];
@@ -70,9 +73,23 @@ export const usePointStore = create<PointState>((set, get) => ({
       id: makeId('ins'),
       createdAt: new Date().toISOString(),
     });
-    await db.inspections.put(inspection);
+    // 从本次实际核验日起，按点位当前核验周期重新推算下次核验日期
+    const point = get().points.find((p) => p.id === inspection.pointId);
+    const nextVerifyDate = point
+      ? nextVerifyDateFrom(inspection.date || todayStr(), point.verifyCycle)
+      : '';
+    const updatedAt = new Date().toISOString();
+    await db.transaction('rw', db.inspections, db.points, async () => {
+      await db.inspections.put(inspection);
+      if (point) {
+        await db.points.update(point.id, { nextVerifyDate, updatedAt });
+      }
+    });
     set((s) => ({
       inspections: [inspection, ...s.inspections].sort((a, b) => (a.date < b.date ? 1 : -1)),
+      points: point
+        ? s.points.map((p) => (p.id === point.id ? { ...p, nextVerifyDate, updatedAt } : p))
+        : s.points,
     }));
     // 结论为不合格时自动生成整改条目，形成闭环
     if (inspection.conclusion === '不合格') {
@@ -111,6 +128,23 @@ export const usePointStore = create<PointState>((set, get) => ({
     await db.rectifies.update(id, plain);
     set((s) => ({
       rectifies: s.rectifies.map((r) => (r.id === id ? { ...r, ...plain } : r)),
+    }));
+  },
+
+  updateVerifyCycle: async (pointId, cycle) => {
+    const point = get().points.find((p) => p.id === pointId);
+    if (!point) return;
+    // 以最近一次实际核验日为基准重算；还没有核验记录时以今天为基准
+    const latest = get()
+      .inspections.filter((i) => i.pointId === pointId)
+      .sort((a, b) => (a.date < b.date ? 1 : -1))[0];
+    const base = latest?.date || todayStr();
+    const nextVerifyDate = nextVerifyDateFrom(base, cycle);
+    const updatedAt = new Date().toISOString();
+    const plain = toPlain({ verifyCycle: cycle, nextVerifyDate, updatedAt });
+    await db.points.update(pointId, plain);
+    set((s) => ({
+      points: s.points.map((p) => (p.id === pointId ? { ...p, ...plain } : p)),
     }));
   },
 

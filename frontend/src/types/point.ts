@@ -30,6 +30,21 @@ export const MAINTAIN_UNITS = [
   '城管委设施科',
 ] as const;
 
+/** 核验周期：每月 / 每季度 / 每半年 / 每年，默认每年 */
+export type VerifyCycle = '每月' | '每季度' | '每半年' | '每年';
+
+export const VERIFY_CYCLES: VerifyCycle[] = ['每月', '每季度', '每半年', '每年'];
+
+export const DEFAULT_VERIFY_CYCLE: VerifyCycle = '每年';
+
+/** 各周期对应的月数 */
+export const VERIFY_CYCLE_MONTHS: Record<VerifyCycle, number> = {
+  每月: 1,
+  每季度: 3,
+  每半年: 6,
+  每年: 12,
+};
+
 /** 设施点位 */
 export interface AccessPoint {
   id: string;
@@ -45,6 +60,10 @@ export interface AccessPoint {
   /** 建成年代 */
   builtYear: number;
   maintainUnit: string;
+  /** 核验周期，决定下次核验日期 */
+  verifyCycle: VerifyCycle;
+  /** 下次核验日期 YYYY-MM-DD：登记或保存核验后按实际核验日推算 */
+  nextVerifyDate: string;
   createdAt: string;
   updatedAt: string;
 }

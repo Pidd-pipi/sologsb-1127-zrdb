@@ -9,6 +9,7 @@ import { usePointStore } from '../stores/pointStore';
 import { useUiStore } from '../stores/uiStore';
 import { FACILITY_TYPES, type AccessPoint } from '../types/point';
 import { isOverdue } from '../utils/format';
+import { verifyStatusOf } from '../utils/verify';
 
 export default function MapView() {
   const points = usePointStore((s) => s.points);
@@ -35,7 +36,12 @@ export default function MapView() {
     : [];
   const activePlans = active ? rectifies.filter((r) => r.pointId === active.id) : [];
 
-  const noteOf = (p: AccessPoint) => latestOf(p.id)?.conclusion ?? '未核验';
+  const noteOf = (p: AccessPoint) => {
+    const conclusion = latestOf(p.id)?.conclusion ?? '未核验';
+    // 合格但已越过复核期限时，标记提示督导员复核
+    if (verifyStatusOf(p.nextVerifyDate) === '已逾期') return `${conclusion}·已逾期`;
+    return conclusion;
+  };
 
   return (
     <div>
@@ -90,7 +96,14 @@ export default function MapView() {
                         setActiveId(p.id);
                         setDrawerOpen(true);
                       }}
-                      actions={[<StatusBadge key="s" value={latest?.conclusion ?? '未核验'} kind="conclusion" />]}
+                      actions={[
+                        <Space key="s" size={4} direction="vertical" style={{ alignItems: 'flex-end' }}>
+                          <StatusBadge value={latest?.conclusion ?? '未核验'} kind="conclusion" />
+                          {verifyStatusOf(p.nextVerifyDate) === '已逾期' ? (
+                            <Tag color="error">已逾期</Tag>
+                          ) : null}
+                        </Space>,
+                      ]}
                     >
                       <List.Item.Meta
                         avatar={<FacilityIcon type={p.facilityType} size={22} />}
@@ -138,6 +151,21 @@ export default function MapView() {
               <Descriptions.Item label="养护单位">{active.maintainUnit}</Descriptions.Item>
               <Descriptions.Item label="经纬度">
                 {active.lng.toFixed(6)}, {active.lat.toFixed(6)}
+              </Descriptions.Item>
+              <Descriptions.Item label="核验周期">{active.verifyCycle}</Descriptions.Item>
+              <Descriptions.Item label="下次核验">
+                <Space size={6} wrap>
+                  {active.nextVerifyDate || (
+                    <Typography.Text type="secondary">未安排</Typography.Text>
+                  )}
+                  {(() => {
+                    const status = verifyStatusOf(active.nextVerifyDate);
+                    if (status === '已逾期') return <Tag color="error">已逾期</Tag>;
+                    if (status === '即将到期') return <Tag color="warning">30天内到期</Tag>;
+                    if (status === '有效') return <Tag color="success">有效</Tag>;
+                    return null;
+                  })()}
+                </Space>
               </Descriptions.Item>
             </Descriptions>
 

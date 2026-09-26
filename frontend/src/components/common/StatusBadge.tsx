@@ -20,6 +20,10 @@ const COLOR_MAP: Record<string, string> = {
   可通行: 'success',
   不可通行: 'error',
   未核验: 'default',
+  已逾期: 'error',
+  '30天内到期': 'warning',
+  有效: 'success',
+  未安排核验: 'default',
 };
 
 export function badgeColor(value: string): string {

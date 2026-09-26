@@ -21,6 +21,31 @@ export function addDays(dateStr: string, days: number): string {
   return `${base.getFullYear()}-${m}-${day}`;
 }
 
+/**
+ * 在指定日期上增加整月数（核验周期推算用）。
+ * 目标月天数不足时取该月最后一天，如 1/31 + 1 月 = 2/28（闰年 2/29）。
+ */
+export function addMonths(dateStr: string, months: number): string {
+  const base = dateStr ? new Date(`${dateStr}T00:00:00`) : new Date();
+  const year = base.getFullYear();
+  const month = base.getMonth();
+  const day = base.getDate();
+  const target = new Date(year, month + months, 1);
+  const lastDay = new Date(target.getFullYear(), target.getMonth() + 1, 0).getDate();
+  target.setDate(Math.min(day, lastDay));
+  const m = `${target.getMonth() + 1}`.padStart(2, '0');
+  const d = `${target.getDate()}`.padStart(2, '0');
+  return `${target.getFullYear()}-${m}-${d}`;
+}
+
+/** 距今天还剩多少天（已过期为负数） */
+export function daysUntil(dateStr: string): number {
+  if (!dateStr) return Infinity;
+  const today = new Date(`${todayStr()}T00:00:00`).getTime();
+  const target = new Date(`${dateStr}T00:00:00`).getTime();
+  return Math.round((target - today) / 86_400_000);
+}
+
 /** 日期字符串比较，a 早于 b 返回负数 */
 export function compareDate(a: string, b: string): number {
   if (!a) return 1;

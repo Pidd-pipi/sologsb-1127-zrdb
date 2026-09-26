@@ -1,9 +1,11 @@
 import Dexie, { type Table } from 'dexie';
 import type { AccessPoint } from '../types/point';
+import { DEFAULT_VERIFY_CYCLE } from '../types/point';
 import type { Inspection } from '../types/inspection';
 import type { RouteSegment } from '../types/route';
 import type { RectifyPlan } from '../types/rectify';
 import { addDays, makeId, todayStr, toPlain } from '../utils/format';
+import { nextVerifyDateFrom } from '../utils/verify';
 import { judgeInspection } from '../utils/routeCheck';
 
 export const DB_NAME = 'gbaccessmap-db';
@@ -13,6 +15,7 @@ export const DB_NAME = 'gbaccessmap-db';
  * v1 建 points / inspections
  * v2 加 routes 表与 pointId 索引
  * v3 加 rectifies 表，并为历史不合格核验补建整改条目
+ * v4 points 增加核验周期 verifyCycle 与下次核验日期 nextVerifyDate（无新索引，回填数据）
  */
 class AccessMapDb extends Dexie {
   points!: Table<AccessPoint, string>;
@@ -72,12 +75,40 @@ class AccessMapDb extends Dexie {
           });
         }
       });
+    this.version(4)
+      .stores({
+        points: 'id, code, facilityType, district, name',
+        inspections: 'id, pointId, date, conclusion',
+        routes: 'id, routeName, fromPointId, toPointId, order',
+        rectifies: 'id, pointId, status, deadline',
+      })
+      .upgrade(async (tx) => {
+        // v4：为历史点位补核验周期（默认每年）与下次核验日期。
+        // 以该点位最近一次实际核验日为基准；从未核验的点位以登记日为基准。
+        const points: AccessPoint[] = await tx.table('points').toArray();
+        const inspections: Inspection[] = await tx.table('inspections').toArray();
+        const latestDate = new Map<string, string>();
+        for (const ins of inspections) {
+          const cur = latestDate.get(ins.pointId);
+          if (!cur || (ins.date && ins.date > cur)) latestDate.set(ins.pointId, ins.date);
+        }
+        for (const p of points) {
+          if (p.verifyCycle && p.nextVerifyDate) continue;
+          const cycle = p.verifyCycle ?? DEFAULT_VERIFY_CYCLE;
+          const base =
+            latestDate.get(p.id) || (p.createdAt ? p.createdAt.slice(0, 10) : '') || todayStr();
+          await tx.table('points').update(p.id, {
+            verifyCycle: cycle,
+            nextVerifyDate: p.nextVerifyDate || nextVerifyDateFrom(base, cycle),
+          });
+        }
+      });
   }
 }
 
 export const db = new AccessMapDb();
 
-const SEED_POINTS: Omit<AccessPoint, 'createdAt' | 'updatedAt'>[] = [
+const SEED_POINTS: (Omit<AccessPoint, 'createdAt' | 'updatedAt' | 'nextVerifyDate'>)[] = [
   {
     id: 'pt-1001',
     code: 'WZ-2024-001',
@@ -89,6 +120,7 @@ const SEED_POINTS: Omit<AccessPoint, 'createdAt' | 'updatedAt'>[] = [
     location: '东单北大街与灯市口大街交叉口东南角',
     builtYear: 2016,
     maintainUnit: '市政道路养护一所',
+    verifyCycle: '每年',
   },
   {
     id: 'pt-1002',
@@ -101,6 +133,7 @@ const SEED_POINTS: Omit<AccessPoint, 'createdAt' | 'updatedAt'>[] = [
     location: '王府井大街南段 118 号门前',
     builtYear: 2018,
     maintainUnit: '市政道路养护二所',
+    verifyCycle: '每年',
   },
   {
     id: 'pt-1003',
@@ -113,6 +146,7 @@ const SEED_POINTS: Omit<AccessPoint, 'createdAt' | 'updatedAt'>[] = [
     location: '地铁西直门站 A 口地面层',
     builtYear: 2019,
     maintainUnit: '轨道交通运营部',
+    verifyCycle: '每季度',
   },
   {
     id: 'pt-1004',
@@ -125,6 +159,7 @@ const SEED_POINTS: Omit<AccessPoint, 'createdAt' | 'updatedAt'>[] = [
     location: '朝阳公园南路南门西侧',
     builtYear: 2015,
     maintainUnit: '园林绿化服务中心',
+    verifyCycle: '每半年',
   },
   {
     id: 'pt-1005',
@@ -137,6 +172,7 @@ const SEED_POINTS: Omit<AccessPoint, 'createdAt' | 'updatedAt'>[] = [
     location: '中关村大街 27 号地下二层',
     builtYear: 2020,
     maintainUnit: '城管委设施科',
+    verifyCycle: '每年',
   },
   {
     id: 'pt-1006',
@@ -149,6 +185,7 @@ const SEED_POINTS: Omit<AccessPoint, 'createdAt' | 'updatedAt'>[] = [
     location: '丰台科技园政务大厅一层',
     builtYear: 2021,
     maintainUnit: '城管委设施科',
+    verifyCycle: '每月',
   },
   {
     id: 'pt-1007',
@@ -161,6 +198,7 @@ const SEED_POINTS: Omit<AccessPoint, 'createdAt' | 'updatedAt'>[] = [
     location: '莲花池东路北侧辅路人行道',
     builtYear: 2014,
     maintainUnit: '市政道路养护一所',
+    verifyCycle: '每年',
   },
   {
     id: 'pt-1008',
@@ -173,12 +211,14 @@ const SEED_POINTS: Omit<AccessPoint, 'createdAt' | 'updatedAt'>[] = [
     location: '鲁谷路 35 号院 3 号楼东侧',
     builtYear: 2013,
     maintainUnit: '轨道交通运营部',
+    verifyCycle: '每年',
   },
 ];
 
 interface SeedInspection {
   pointId: string;
-  date: string;
+  /** 核验日期相对今天的偏移天数：保证示例数据始终覆盖逾期/临期/有效三种状态 */
+  offsetDays: number;
   inspector: string;
   slope: number;
   clearWidth: number;
@@ -191,7 +231,7 @@ interface SeedInspection {
 const SEED_INSPECTIONS: SeedInspection[] = [
   {
     pointId: 'pt-1001',
-    date: '2025-03-12',
+    offsetDays: -30,
     inspector: '督导员 李维',
     slope: 3.2,
     clearWidth: 150,
@@ -202,7 +242,7 @@ const SEED_INSPECTIONS: SeedInspection[] = [
   },
   {
     pointId: 'pt-1002',
-    date: '2025-03-14',
+    offsetDays: -400,
     inspector: '督导员 王岚',
     slope: 2.1,
     clearWidth: 130,
@@ -213,7 +253,7 @@ const SEED_INSPECTIONS: SeedInspection[] = [
   },
   {
     pointId: 'pt-1003',
-    date: '2025-04-02',
+    offsetDays: -80,
     inspector: '督导员 陈默',
     slope: 1.4,
     clearWidth: 160,
@@ -224,7 +264,7 @@ const SEED_INSPECTIONS: SeedInspection[] = [
   },
   {
     pointId: 'pt-1004',
-    date: '2025-04-08',
+    offsetDays: -200,
     inspector: '督导员 李维',
     slope: 6.4,
     clearWidth: 105,
@@ -235,7 +275,7 @@ const SEED_INSPECTIONS: SeedInspection[] = [
   },
   {
     pointId: 'pt-1005',
-    date: '2025-04-19',
+    offsetDays: -20,
     inspector: '督导员 赵敏',
     slope: 1.1,
     clearWidth: 155,
@@ -246,7 +286,7 @@ const SEED_INSPECTIONS: SeedInspection[] = [
   },
   {
     pointId: 'pt-1006',
-    date: '2025-05-06',
+    offsetDays: -10,
     inspector: '督导员 赵敏',
     slope: 2.6,
     clearWidth: 140,
@@ -257,7 +297,7 @@ const SEED_INSPECTIONS: SeedInspection[] = [
   },
   {
     pointId: 'pt-1007',
-    date: '2025-05-11',
+    offsetDays: -500,
     inspector: '督导员 王岚',
     slope: 9.5,
     clearWidth: 82,
@@ -268,7 +308,7 @@ const SEED_INSPECTIONS: SeedInspection[] = [
   },
   {
     pointId: 'pt-1008',
-    date: '2025-05-20',
+    offsetDays: -15,
     inspector: '督导员 陈默',
     slope: 1.8,
     clearWidth: 145,
@@ -302,8 +342,9 @@ const SEED_ROUTES: SeedRoute[] = [
 function buildSeed() {
   const now = new Date().toISOString();
   const today = todayStr();
-  const points: AccessPoint[] = SEED_POINTS.map((p) => ({ ...p, createdAt: now, updatedAt: now }));
+  // 先算出每条种子核验的实际日期（相对今天偏移），再回填点位的下次核验日期
   const inspections: Inspection[] = SEED_INSPECTIONS.map((s, i) => {
+    const date = addDays(today, s.offsetDays);
     const judged = judgeInspection({
       slope: s.slope,
       clearWidth: s.clearWidth,
@@ -314,7 +355,7 @@ function buildSeed() {
     return {
       id: `ins-seed-${i + 1}`,
       pointId: s.pointId,
-      date: s.date,
+      date,
       inspector: s.inspector,
       slope: s.slope,
       clearWidth: s.clearWidth,
@@ -324,6 +365,20 @@ function buildSeed() {
       conclusion: judged.conclusion,
       problem: s.problem,
       createdAt: now,
+    };
+  });
+  const latestDateByPoint = new Map<string, string>();
+  for (const ins of inspections) {
+    const cur = latestDateByPoint.get(ins.pointId);
+    if (!cur || ins.date > cur) latestDateByPoint.set(ins.pointId, ins.date);
+  }
+  const points: AccessPoint[] = SEED_POINTS.map((p) => {
+    const base = latestDateByPoint.get(p.id) || today;
+    return {
+      ...p,
+      nextVerifyDate: nextVerifyDateFrom(base, p.verifyCycle),
+      createdAt: now,
+      updatedAt: now,
     };
   });
   const routes: RouteSegment[] = [];

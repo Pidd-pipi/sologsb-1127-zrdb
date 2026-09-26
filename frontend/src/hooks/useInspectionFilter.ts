@@ -5,6 +5,7 @@ import type { AccessPoint } from '../types/point';
 import type { Inspection } from '../types/inspection';
 import type { RectifyPlan } from '../types/rectify';
 import { isOverdue } from '../utils/format';
+import { isPassingPoint, verifyStatusOf, type VerifyStatus } from '../utils/verify';
 
 export interface InspectionFilterResult {
   filter: InspectionFilter;
@@ -19,7 +20,15 @@ export interface InspectionFilterResult {
   pointMap: Map<string, AccessPoint>;
   /** 每个点位最新一次核验 */
   latestByPoint: Map<string, Inspection>;
-  /** 各单位/类型统计用：合格率 */
+  /** 每个点位的核验到期状态（已逾期 / 30天内到期 / 有效 / 未安排） */
+  statusByPoint: Map<string, VerifyStatus>;
+  /** 已逾期点位数 */
+  overdueCount: number;
+  /** 30 天内到期点位数 */
+  dueSoonCount: number;
+  /** 有效期内点位数 */
+  activeCount: number;
+  /** 合格率：分子只计最新结论为合格且仍在有效期内的点位 */
   passRate: number;
 }
 
@@ -85,11 +94,29 @@ export function useInspectionFilter(): InspectionFilterResult {
     if (!total) return 0;
     let pass = 0;
     for (const p of filteredPoints) {
-      const latest = latestByPoint.get(p.id);
-      if (latest && latest.conclusion === '合格') pass += 1;
+      if (isPassingPoint(p, latestByPoint.get(p.id))) pass += 1;
     }
     return Math.round((pass / total) * 1000) / 10;
   }, [filteredPoints, latestByPoint]);
+
+  const statusByPoint = useMemo(() => {
+    const map = new Map<string, VerifyStatus>();
+    for (const p of points) map.set(p.id, verifyStatusOf(p.nextVerifyDate));
+    return map;
+  }, [points]);
+
+  const overdueCount = useMemo(
+    () => filteredPoints.filter((p) => statusByPoint.get(p.id) === '已逾期').length,
+    [filteredPoints, statusByPoint],
+  );
+  const dueSoonCount = useMemo(
+    () => filteredPoints.filter((p) => statusByPoint.get(p.id) === '即将到期').length,
+    [filteredPoints, statusByPoint],
+  );
+  const activeCount = useMemo(
+    () => filteredPoints.filter((p) => statusByPoint.get(p.id) === '有效').length,
+    [filteredPoints, statusByPoint],
+  );
 
   return {
     filter,
@@ -100,6 +127,10 @@ export function useInspectionFilter(): InspectionFilterResult {
     pendingRectifies,
     pointMap,
     latestByPoint,
+    statusByPoint,
+    overdueCount,
+    dueSoonCount,
+    activeCount,
     passRate,
   };
 }

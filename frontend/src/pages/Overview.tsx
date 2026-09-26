@@ -25,6 +25,7 @@ import StatusBadge from '../components/common/StatusBadge';
 import FacilityIcon from '../components/common/FacilityIcon';
 import EmptyState from '../components/common/EmptyState';
 import { isOverdue, percent } from '../utils/format';
+import { isPassingPoint, type VerifyStatus } from '../utils/verify';
 
 interface GroupRow {
   key: string;
@@ -32,8 +33,16 @@ interface GroupRow {
   total: number;
   pass: number;
   passRate: number;
+  overdue: number;
   pending: number;
 }
+
+/** 三类到期状态与下钻维度的映射 */
+const STATUS_DRILL: { status: VerifyStatus; kind: 'overdue' | 'dueSoon' | 'active'; title: string }[] = [
+  { status: '已逾期', kind: 'overdue', title: '已逾期 · 待复核' },
+  { status: '即将到期', kind: 'dueSoon', title: '30天内到期' },
+  { status: '有效', kind: 'active', title: '有效' },
+];
 
 export default function Overview() {
   const {
@@ -44,6 +53,10 @@ export default function Overview() {
     filteredInspections,
     pendingRectifies,
     latestByPoint,
+    statusByPoint,
+    overdueCount,
+    dueSoonCount,
+    activeCount,
     passRate,
   } = useInspectionFilter();
   const drill = useUiStore((s) => s.drill);
@@ -53,42 +66,52 @@ export default function Overview() {
     () =>
       DISTRICTS.map((d) => {
         const list = filteredPoints.filter((p) => p.district === d);
-        const pass = list.filter((p) => latestByPoint.get(p.id)?.conclusion === '合格').length;
+        const pass = list.filter((p) => isPassingPoint(p, latestByPoint.get(p.id))).length;
+        const overdue = list.filter((p) => statusByPoint.get(p.id) === '已逾期').length;
         return {
           key: d,
           name: d,
           total: list.length,
           pass,
           passRate: percent(pass, list.length),
+          overdue,
           pending: pendingRectifies.filter((r) => list.some((p) => p.id === r.pointId)).length,
         };
       }).filter((r) => r.total > 0),
-    [filteredPoints, latestByPoint, pendingRectifies],
+    [filteredPoints, latestByPoint, statusByPoint, pendingRectifies],
   );
 
   const typeRows = useMemo<GroupRow[]>(
     () =>
       FACILITY_TYPES.map((t) => {
         const list = filteredPoints.filter((p) => p.facilityType === t);
-        const pass = list.filter((p) => latestByPoint.get(p.id)?.conclusion === '合格').length;
+        const pass = list.filter((p) => isPassingPoint(p, latestByPoint.get(p.id))).length;
+        const overdue = list.filter((p) => statusByPoint.get(p.id) === '已逾期').length;
         return {
           key: t,
           name: t,
           total: list.length,
           pass,
           passRate: percent(pass, list.length),
+          overdue,
           pending: pendingRectifies.filter((r) => list.some((p) => p.id === r.pointId)).length,
         };
       }).filter((r) => r.total > 0),
-    [filteredPoints, latestByPoint, pendingRectifies],
+    [filteredPoints, latestByPoint, statusByPoint, pendingRectifies],
   );
 
   const drillPoints = useMemo(() => {
     if (drill.kind === 'district') return filteredPoints.filter((p) => p.district === drill.value);
     if (drill.kind === 'facilityType')
       return filteredPoints.filter((p) => p.facilityType === drill.value);
+    if (drill.kind === 'overdue')
+      return filteredPoints.filter((p) => statusByPoint.get(p.id) === '已逾期');
+    if (drill.kind === 'dueSoon')
+      return filteredPoints.filter((p) => statusByPoint.get(p.id) === '即将到期');
+    if (drill.kind === 'active')
+      return filteredPoints.filter((p) => statusByPoint.get(p.id) === '有效');
     return filteredPoints;
-  }, [drill, filteredPoints]);
+  }, [drill, filteredPoints, statusByPoint]);
 
   const pointColumns: ColumnsType<AccessPoint> = [
     { title: '点位编号', dataIndex: 'code', width: 130 },
@@ -108,6 +131,28 @@ export default function Overview() {
       title: '最新结论',
       width: 110,
       render: (_, row) => <StatusBadge value={latestByPoint.get(row.id)?.conclusion ?? '未核验'} kind="conclusion" />,
+    },
+    {
+      title: '下次核验',
+      dataIndex: 'nextVerifyDate',
+      width: 120,
+      render: (d: string) => d || <Typography.Text type="secondary">未安排</Typography.Text>,
+    },
+    {
+      title: '到期状态',
+      width: 120,
+      filters: STATUS_DRILL.map((s) => ({ text: s.title, value: s.status })),
+      onFilter: (value, row) => statusByPoint.get(row.id) === (value as VerifyStatus),
+      render: (_, row) => {
+        const status = statusByPoint.get(row.id) ?? '未安排';
+        const label =
+          status === '即将到期'
+            ? '30天内到期'
+            : status === '未安排'
+              ? '未安排核验'
+              : status;
+        return <StatusBadge value={label} kind="generic" />;
+      },
     },
     {
       title: '核验次数',
@@ -156,7 +201,13 @@ export default function Overview() {
         ? `${drill.value} · 点位清单`
         : drill.kind === 'pending'
           ? '待整改条目'
-          : '全部点位清单';
+          : drill.kind === 'overdue'
+            ? '已逾期 · 待复核清单'
+            : drill.kind === 'dueSoon'
+              ? '30天内到期 · 待复核清单'
+              : drill.kind === 'active'
+                ? '有效点位清单'
+                : '全部点位清单';
 
   return (
     <div>
@@ -220,7 +271,7 @@ export default function Overview() {
         </Col>
         <Col xs={24} sm={12} lg={6}>
           <Card className="gb-stat-card" data-testid="stat-passrate">
-            <Statistic title="合格率（按最新结论）" value={passRate} suffix="%" precision={1} />
+            <Statistic title="合格率（有效期内合格点位）" value={passRate} suffix="%" precision={1} />
           </Card>
         </Col>
         <Col xs={24} sm={12} lg={6}>
@@ -240,6 +291,51 @@ export default function Overview() {
         <Col xs={24} sm={12} lg={6}>
           <Card className="gb-stat-card" data-testid="stat-inspections">
             <Statistic title="核验记录" value={filteredInspections.length} suffix="次" />
+          </Card>
+        </Col>
+      </Row>
+
+      <Row gutter={[16, 16]} style={{ marginTop: 16 }}>
+        <Col xs={24} sm={8}>
+          <Card
+            className={`gb-stat-card ${drill.kind === 'overdue' ? 'gb-stat-card-active' : ''}`}
+            onClick={() => setDrill('overdue', '已逾期')}
+            data-testid="stat-overdue"
+          >
+            <Statistic
+              title="已逾期（待办）"
+              value={overdueCount}
+              suffix="处"
+              valueStyle={{ color: overdueCount ? '#cf1322' : undefined }}
+            />
+          </Card>
+        </Col>
+        <Col xs={24} sm={8}>
+          <Card
+            className={`gb-stat-card ${drill.kind === 'dueSoon' ? 'gb-stat-card-active' : ''}`}
+            onClick={() => setDrill('dueSoon', '30天内到期')}
+            data-testid="stat-due-soon"
+          >
+            <Statistic
+              title="30天内到期"
+              value={dueSoonCount}
+              suffix="处"
+              valueStyle={{ color: dueSoonCount ? '#d46b08' : undefined }}
+            />
+          </Card>
+        </Col>
+        <Col xs={24} sm={8}>
+          <Card
+            className={`gb-stat-card ${drill.kind === 'active' ? 'gb-stat-card-active' : ''}`}
+            onClick={() => setDrill('active', '有效')}
+            data-testid="stat-active"
+          >
+            <Statistic
+              title="有效"
+              value={activeCount}
+              suffix="处"
+              valueStyle={{ color: '#389e0d' }}
+            />
           </Card>
         </Col>
       </Row>
@@ -267,6 +363,13 @@ export default function Overview() {
                   width: 90,
                   render: (v: number) => `${v}%`,
                 },
+                {
+                  title: '已逾期',
+                  dataIndex: 'overdue',
+                  width: 80,
+                  render: (v: number) =>
+                    v ? <Tag color="error" data-testid="group-overdue">{v}</Tag> : 0,
+                },
                 { title: '待整改', dataIndex: 'pending', width: 80 },
               ]}
             />
@@ -293,6 +396,12 @@ export default function Overview() {
                 { title: '点位数', dataIndex: 'total', width: 80 },
                 { title: '合格', dataIndex: 'pass', width: 70 },
                 { title: '合格率', dataIndex: 'passRate', width: 90, render: (v: number) => `${v}%` },
+                {
+                  title: '已逾期',
+                  dataIndex: 'overdue',
+                  width: 80,
+                  render: (v: number) => (v ? <Tag color="error">{v}</Tag> : 0),
+                },
                 { title: '待整改', dataIndex: 'pending', width: 80 },
               ]}
             />

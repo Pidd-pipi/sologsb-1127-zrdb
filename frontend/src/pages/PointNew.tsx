@@ -28,12 +28,16 @@ import {
   DISTRICTS,
   FACILITY_TYPES,
   MAINTAIN_UNITS,
+  VERIFY_CYCLES,
+  DEFAULT_VERIFY_CYCLE,
   type AccessPoint,
   type FacilityType,
+  type VerifyCycle,
 } from '../types/point';
 import { OCCUPIED_LEVELS, type OccupiedLevel } from '../types/inspection';
 import { judgeInspection } from '../utils/routeCheck';
 import { todayStr } from '../utils/format';
+import { nextVerifyDateFrom } from '../utils/verify';
 
 interface PointForm {
   code: string;
@@ -43,6 +47,8 @@ interface PointForm {
   location: string;
   builtYear: number;
   maintainUnit: string;
+  /** 核验周期：每月 / 每季度 / 每半年 / 每年 */
+  verifyCycle: VerifyCycle;
   lng: number;
   lat: number;
   withFirstInspection: boolean;
@@ -66,6 +72,7 @@ function defaultForm(): PointForm {
     location: '',
     builtYear: new Date().getFullYear() - 5,
     maintainUnit: MAINTAIN_UNITS[0],
+    verifyCycle: DEFAULT_VERIFY_CYCLE,
     lng: 116.4183,
     lat: 39.9142,
     withFirstInspection: true,
@@ -113,6 +120,11 @@ export default function PointNew() {
       location: draft.location,
       builtYear: draft.builtYear,
       maintainUnit: draft.maintainUnit,
+      verifyCycle: draft.verifyCycle,
+      nextVerifyDate: nextVerifyDateFrom(
+        draft.withFirstInspection ? draft.inspectDate || todayStr() : todayStr(),
+        draft.verifyCycle,
+      ),
       createdAt: '',
       updatedAt: '',
     };
@@ -134,6 +146,7 @@ export default function PointNew() {
     }
     setSubmitting(true);
     try {
+      const firstDate = draft.inspectDate || todayStr();
       const point = await addPoint({
         code: draft.code.trim(),
         name: draft.name.trim(),
@@ -142,13 +155,19 @@ export default function PointNew() {
         location: draft.location.trim(),
         builtYear: draft.builtYear,
         maintainUnit: draft.maintainUnit,
+        verifyCycle: draft.verifyCycle,
+        // 有首次核验时以实际核验日为基准，跳过时以登记当天为基准
+        nextVerifyDate: nextVerifyDateFrom(
+          draft.withFirstInspection ? firstDate : todayStr(),
+          draft.verifyCycle,
+        ),
         lng: Number(draft.lng),
         lat: Number(draft.lat),
       });
       if (draft.withFirstInspection) {
         await addInspection({
           pointId: point.id,
-          date: draft.inspectDate || todayStr(),
+          date: firstDate,
           inspector: draft.inspector.trim() || '未署名督导员',
           slope: draft.slope,
           clearWidth: draft.clearWidth,
@@ -279,6 +298,16 @@ export default function PointNew() {
                       value={draft.builtYear}
                       onChange={(v) => patch({ builtYear: Number(v ?? 2020) })}
                       style={{ width: '100%' }}
+                    />
+                  </Form.Item>
+                </Col>
+                <Col span={12}>
+                  <Form.Item label="核验周期" required>
+                    <Select
+                      id="verifyCycle"
+                      value={draft.verifyCycle}
+                      onChange={(v) => patch({ verifyCycle: v })}
+                      options={VERIFY_CYCLES.map((c) => ({ value: c, label: c }))}
                     />
                   </Form.Item>
                 </Col>
@@ -464,6 +493,13 @@ export default function PointNew() {
               </Typography.Text>
               <Typography.Text type="secondary" className="gb-muted" data-testid="coord-preview">
                 经度 {Number(draft.lng).toFixed(6)} / 纬度 {Number(draft.lat).toFixed(6)}
+              </Typography.Text>
+              <Typography.Text type="secondary" className="gb-muted" data-testid="next-verify-preview">
+                核验周期 {draft.verifyCycle} · 下次核验{' '}
+                {nextVerifyDateFrom(
+                  draft.withFirstInspection ? draft.inspectDate || todayStr() : todayStr(),
+                  draft.verifyCycle,
+                )}
               </Typography.Text>
             </Space>
           </Card>
